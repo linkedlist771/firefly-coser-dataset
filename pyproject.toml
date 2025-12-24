@@ -5,6 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "gallery-dl>=1.31.1",
     "httpx>=0.28.1",
+    "jupyter>=1.1.1",
+    "loguru>=0.7.3",
+    "lxml>=6.0.2",
+    "markdown>=3.10",
+    "notebook>=7.5.1",
+    "pandas>=2.3.3",
+    "rich>=14.2.0",
     "tqdm>=4.67.1",
 ]
