@@ -14,6 +14,7 @@ import asyncio
 import pandas as pd
 from configs import CSV_FILES, RESOURCES_DIR
 
+
 def print_md(md: str):
     console = Console()
     console.print(Markdown(md))
@@ -36,9 +37,9 @@ def create_curl_client(
 ) -> AsyncClient:
     transport = AsyncCurlTransport(
         impersonate=impersonate,
-        default_headers=False, 
+        default_headers=False,
         curl_options={
-            CurlOpt.FRESH_CONNECT: True, 
+            CurlOpt.FRESH_CONNECT: True,
         },
     )
     return AsyncClient(
@@ -50,6 +51,7 @@ def create_curl_client(
 
 # <img alt="" class="lazyload" data-src="https://avatar2.bahamut.com.tw/avataruserpic/l/e/leisure/leisure.png" id="avatar_fpath126785">
 
+
 def _extract_image_url(img_tag: str) -> str:
     pattern = r'(?:src|data-src)=["\']?(https://[^"\'\s>]+)'
     match = re.search(pattern, img_tag)
@@ -57,18 +59,20 @@ def _extract_image_url(img_tag: str) -> str:
         return match.group(1)
     return ""
 
+
 def parse_image_urls_from_html(html: str) -> list[str]:
     soup = BeautifulSoup(html, "html.parser")
     image_urls = []
     for img in soup.find_all("img"):
         # logger.debug(f"img:\n{img}")
         # image_urls.append(img["src"])
-        # we need a regex based 
+        # we need a regex based
         image_url = _extract_image_url(str(img))
         if image_url:
             image_urls.append(image_url)
 
     return image_urls
+
 
 def filter_image_urls(image_urls: list[str]) -> list[str]:
     filtered_image_urls = []
@@ -118,17 +122,19 @@ def get_image_filename(url: str, index: int) -> str:
 # https://www.weibo.com/6305408483/QdnGWcoQv
 
 
-
 async def scrape_single_image_url(url: str, target_dir: Path) -> bool:
     image_urls = await scrape_image_urls(url)
     if len(image_urls) == 0:
         return False
     target_dir.mkdir(parents=True, exist_ok=True)
-    download_tasks = [download_image(image_url, target_dir / get_image_filename(image_url, idx)) for idx, image_url in enumerate(image_urls)]   
+    download_tasks = [
+        download_image(image_url, target_dir / get_image_filename(image_url, idx))
+        for idx, image_url in enumerate(image_urls)
+    ]
     async for result in async_tqdm(
         asyncio.as_completed(download_tasks),
         total=len(download_tasks),
-        desc="Downloading images"
+        desc="Downloading images",
     ):
         if await result:
             success_count += 1
@@ -141,5 +147,7 @@ async def scrape_single_image_url(url: str, target_dir: Path) -> bool:
 
 if __name__ == "__main__":
     url = "https://www.91shenshi.com/posts/tomoyo-jiang-xing-qiong-tie-dao-liu-ying-qi-pao/"
-    target_dir = RESOURCES_DIR / "images" / "tomoyo-jiang-xing-qiong-tie-dao-liu-ying-qi-pao"
+    target_dir = (
+        RESOURCES_DIR / "images" / "tomoyo-jiang-xing-qiong-tie-dao-liu-ying-qi-pao"
+    )
     asyncio.run(scrape_single_image_url(url, target_dir))

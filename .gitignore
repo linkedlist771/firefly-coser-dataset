@@ -211,3 +211,6 @@ datasets
 resources
 .DS_Store
 models
+.DS_Store
+
+*.pt
