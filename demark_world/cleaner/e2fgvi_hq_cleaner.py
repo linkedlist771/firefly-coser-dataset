@@ -11,7 +11,8 @@ from demark_world.configs import (
     E2FGVI_HQ_CHECKPOINT_PATH,
     E2FGVI_HQ_CHECKPOINT_REMOTE_URL,
 )
-from demark_world.models.model.e2fgvi_hq import InpaintGenerator
+
+# from demark_world.models.model.e2fgvi_hq import InpaintGenerator
 from demark_world.utils.devices_utils import get_device
 from demark_world.utils.download_utils import ensure_model_downloaded
 from demark_world.utils.video_utils import merge_frames_with_overlap

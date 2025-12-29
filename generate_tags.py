@@ -1,11 +1,9 @@
 """
 为 firefly_images_filtered_labelled 目录下的每张图片生成标签文件
 使用 WD14 tagger 模型生成标签
-确保每个标签文件包含 cosplay 和 firefly 这两个触发词
+确保每个标签文件包含触发词
 
-需要手动下载模型文件到 models/ 目录:
-1. model.onnx: https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx
-2. selected_tags.csv: https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv
+模型会自动从 HuggingFace 下载到 models/ 目录
 """
 
 from pathlib import Path
@@ -16,15 +14,15 @@ from configs import RESOURCES_DIR, ROOT_DIR
 import numpy as np
 import csv
 import onnxruntime as ort
+from shutil import copyfile
+import requests
 
 # 目标目录
-IMAGE_DIR = RESOURCES_DIR / "firefly_images_filtered_labelled"
 
 # 本地模型目录
 MODEL_DIR = ROOT_DIR / "models"
 
 # 必须包含的触发词
-TRIGGER_WORDS = ["cosplay", "firefly"]
 
 # 支持的图片格式
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -32,6 +30,33 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 # WD14 模型文件名
 MODEL_FILENAME = "model.onnx"
 LABEL_FILENAME = "selected_tags.csv"
+
+# HuggingFace 下载地址
+MODEL_URL = (
+    "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx"
+)
+LABEL_URL = "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv"
+
+
+def download_file(url: str, save_path: Path, desc: str = "Downloading"):
+    """从URL下载文件，显示进度条"""
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Downloading {desc} from {url}")
+
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+
+    total_size = int(response.headers.get("content-length", 0))
+
+    with open(save_path, "wb") as f:
+        with tqdm(total=total_size, unit="B", unit_scale=True, desc=desc) as pbar:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    pbar.update(len(chunk))
+
+    logger.info(f"Downloaded {desc} to {save_path}")
 
 
 class WD14Tagger:
@@ -46,31 +71,31 @@ class WD14Tagger:
         self._load_model()
 
     def _load_model(self):
-        """加载模型和标签"""
+        """加载模型和标签，如果不存在则自动下载"""
         model_path = self.model_dir / MODEL_FILENAME
         label_path = self.model_dir / LABEL_FILENAME
 
-        # 检查模型文件是否存在
+        # 自动下载模型文件
         if not model_path.exists():
-            logger.error(f"Model file not found: {model_path}")
-            logger.error(
-                "Please download from: https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx"
-            )
-            raise FileNotFoundError(f"Model file not found: {model_path}")
+            logger.warning(f"Model file not found: {model_path}")
+            download_file(MODEL_URL, model_path, "WD14 model (model.onnx)")
 
         if not label_path.exists():
-            logger.error(f"Label file not found: {label_path}")
-            logger.error(
-                "Please download from: https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv"
-            )
-            raise FileNotFoundError(f"Label file not found: {label_path}")
+            logger.warning(f"Label file not found: {label_path}")
+            download_file(LABEL_URL, label_path, "WD14 labels (selected_tags.csv)")
 
         logger.info(f"Loading WD14 model from {model_path}...")
 
-        # 加载 ONNX 模型
-        self.model = ort.InferenceSession(
-            str(model_path), providers=["CPUExecutionProvider"]
-        )
+        # 加载 ONNX 模型，优先使用 CUDA
+        available_providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in available_providers:
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            logger.info("Using CUDA for inference")
+        else:
+            providers = ["CPUExecutionProvider"]
+            logger.info("CUDA not available, using CPU for inference")
+
+        self.model = ort.InferenceSession(str(model_path), providers=providers)
 
         # 加载标签
         self._load_tags(str(label_path))
@@ -152,16 +177,16 @@ class WD14Tagger:
             return []
 
 
-def ensure_trigger_words(tags: list[str]) -> list[str]:
+def ensure_trigger_words(tags: list[str], trigger_words: list[str]) -> list[str]:
     """
     确保标签列表包含必要的触发词
     触发词放在最前面
     """
     # 移除已存在的触发词(避免重复)
-    tags = [t for t in tags if t.lower() not in [tw.lower() for tw in TRIGGER_WORDS]]
+    tags = [t for t in tags if t.lower() not in [tw.lower() for tw in trigger_words]]
 
     # 触发词放在最前面
-    return TRIGGER_WORDS + tags
+    return trigger_words + tags
 
 
 def save_tags_to_file(tags: list[str], output_path: Path):
@@ -172,41 +197,44 @@ def save_tags_to_file(tags: list[str], output_path: Path):
     output_path.write_text(tag_string, encoding="utf-8")
 
 
-def main():
-    """主函数：为所有图片生成标签文件"""
-
-    if not IMAGE_DIR.exists():
-        logger.error(f"Image directory not found: {IMAGE_DIR}")
-        return
+def process_dataset(
+    image_dir: Path, target_dir: Path, trigger_words: list[str], tagger: WD14Tagger
+) -> tuple[int, int]:
+    """处理单个数据集目录"""
+    if not image_dir.exists():
+        logger.error(f"Image directory not found: {image_dir}")
+        return 0, 0
 
     # 获取所有图片文件
     image_files = [
-        f for f in IMAGE_DIR.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS
+        f for f in image_dir.rglob("*") if f.suffix.lower() in IMAGE_EXTENSIONS
     ]
 
     if not image_files:
-        logger.warning(f"No image files found in {IMAGE_DIR}")
-        return
+        logger.warning(f"No image files found in {image_dir}")
+        return 0, 0
 
-    logger.info(f"Found {len(image_files)} images in {IMAGE_DIR}")
-
-    # 初始化 tagger
-    tagger = WD14Tagger()
+    logger.info(f"Found {len(image_files)} images in {image_dir}")
 
     success_count = 0
     error_count = 0
 
-    for image_path in tqdm(image_files, desc="Generating tags"):
+    for image_path in tqdm(image_files, desc=f"Processing {image_dir.name}"):
         try:
             # 生成标签
             tags = tagger.predict(image_path)
 
             # 确保包含触发词
-            tags = ensure_trigger_words(tags)
+            tags = ensure_trigger_words(tags, trigger_words)
 
             # 保存到同名 .txt 文件
-            output_path = image_path.with_suffix(".txt")
+            image_file_name = image_path.name
+            output_path = target_dir / Path(image_file_name).with_suffix(".txt")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
             save_tags_to_file(tags, output_path)
+
+            copyfile(image_path, target_dir / image_file_name)
 
             success_count += 1
             logger.debug(f"Generated tags for {image_path.name}: {len(tags)} tags")
@@ -215,7 +243,50 @@ def main():
             error_count += 1
             logger.error(f"Error processing {image_path}: {e}")
 
-    logger.info(f"Completed! Success: {success_count}, Errors: {error_count}")
+    return success_count, error_count
+
+
+def main():
+    """主函数：为所有图片生成标签文件"""
+
+    # 数据集配置
+    DATASETS = [
+        {
+            "image_dir": Path("datasets/cleaned_data/hips_back"),
+            "trigger_words": ["漏B", "翘屁股", "掰开", "背面"],
+        },
+        {
+            "image_dir": Path("datasets/cleaned_data/sitting_posture"),
+            "trigger_words": ["漏B", "坐姿", "正面", "张开腿"],
+        },
+    ]
+
+    TARGET_DIR = Path("datasets/labelled_data")
+    TARGET_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 初始化 tagger（只加载一次）
+    tagger = WD14Tagger()
+
+    total_success = 0
+    total_error = 0
+
+    for dataset in DATASETS:
+        logger.info(f"Processing dataset: {dataset['image_dir']}")
+        success, error = process_dataset(
+            image_dir=dataset["image_dir"],
+            target_dir=TARGET_DIR,
+            trigger_words=dataset["trigger_words"],
+            tagger=tagger,
+        )
+        total_success += success
+        total_error += error
+        logger.info(
+            f"Dataset {dataset['image_dir'].name}: Success={success}, Errors={error}"
+        )
+
+    logger.info(
+        f"All completed! Total Success: {total_success}, Total Errors: {total_error}"
+    )
 
 
 if __name__ == "__main__":
